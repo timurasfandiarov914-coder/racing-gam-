@@ -14,6 +14,7 @@ var _nitro_label: Label
 var _nitro_bar: ProgressBar
 var _nitro_value := 100.0
 var _touch_hitboxes: Array[Dictionary] = []
+var _active_touch_actions: Dictionary = {}
 
 func _ready() -> void:
 	_ensure_input_actions()
@@ -23,15 +24,35 @@ func _ready() -> void:
 	_build_player()
 	_build_hud()
 
+func _input(event: InputEvent) -> void:
+	# Read raw Android touch events before GUI mouse handling. Every finger keeps
+	# its own action so GAS + steering (or BRAKE + steering) work simultaneously.
+	if event is InputEventScreenTouch:
+		var touch := event as InputEventScreenTouch
+		if touch.pressed:
+			var action := _action_at_screen_position(touch.position)
+			if not action.is_empty():
+				_active_touch_actions[touch.index] = action
+		else:
+			_active_touch_actions.erase(touch.index)
+		_refresh_touch_visuals()
+	elif event is InputEventScreenDrag:
+		var drag := event as InputEventScreenDrag
+		# Also allow a finger that slides onto a control to start holding it.
+		if not _active_touch_actions.has(drag.index):
+			var action := _action_at_screen_position(drag.position)
+			if not action.is_empty():
+				_active_touch_actions[drag.index] = action
+		_refresh_touch_visuals()
+
 func _process(delta: float) -> void:
-	_sync_touch_control_positions()
 	if not is_instance_valid(_car):
 		return
 
-	var throttle := Input.get_action_strength("accelerate")
-	var brake := Input.get_action_strength("brake")
-	var steering := Input.get_action_strength("steer_right") - Input.get_action_strength("steer_left")
-	var nitro_requested := Input.is_action_pressed("nitro")
+	var throttle := _get_action_strength("accelerate")
+	var brake := _get_action_strength("brake")
+	var steering := _get_action_strength("steer_right") - _get_action_strength("steer_left")
+	var nitro_requested := _is_action_pressed("nitro")
 	var nitro_active := nitro_requested and throttle > 0.0 and _nitro_value > 0.0
 
 	if nitro_active:
@@ -436,8 +457,7 @@ func _build_hud() -> void:
 	_make_touch_button(root, "NITRO", "nitro", "right", 32.0, 118.0, 92.0, 48.0, 13)
 
 func _make_touch_button(parent: Control, label_text: String, action: String, side: String, offset_x: float, bottom: float, width: float, height: float, font_size: int) -> void:
-	# Button is visual-only. TouchScreenButton receives independent touch IDs and
-	# supports holding throttle while steering with another finger.
+	# Buttons are visual-only. Raw screen-touch events are handled by _input().
 	var button := Button.new()
 	button.text = label_text
 	button.focus_mode = Control.FOCUS_NONE
@@ -465,35 +485,42 @@ func _make_touch_button(parent: Control, label_text: String, action: String, sid
 	button.offset_bottom = -bottom
 	parent.add_child(button)
 
-	var touch_button := TouchScreenButton.new()
-	touch_button.name = "Touch_" + action
-	touch_button.action = action
-	touch_button.passby_press = true
-	touch_button.shape_visible = false
-	var hit_shape := RectangleShape2D.new()
-	hit_shape.size = Vector2(width + 24.0, height + 24.0)
-	touch_button.shape = hit_shape
-	touch_button.shape_centered = true
-	touch_button.position = button.position + button.size * 0.5
-	parent.add_child(touch_button)
-	touch_button.pressed.connect(_set_touch_visual_pressed.bind(button, true))
-	touch_button.released.connect(_set_touch_visual_pressed.bind(button, false))
-	_touch_hitboxes.append({"visual": button, "touch": touch_button})
+	_touch_hitboxes.append({"visual": button, "action": action})
 
-func _set_touch_visual_pressed(button: Button, pressed: bool) -> void:
-	if not is_instance_valid(button):
-		return
-	if pressed:
-		button.add_theme_stylebox_override("normal", _button_style(Color(0.08, 0.35, 0.48, 0.94), Color(0.64, 0.9, 1.0, 1.0)))
-	else:
-		button.add_theme_stylebox_override("normal", _button_style(Color(0.025, 0.055, 0.085, 0.72), Color(0.43, 0.65, 0.76, 0.76)))
-
-func _sync_touch_control_positions() -> void:
+func _action_at_screen_position(screen_position: Vector2) -> String:
+	# Use the same Control rectangles used for drawing, expanded by 12 px per side.
 	for item in _touch_hitboxes:
 		var visual := item["visual"] as Control
-		var touch := item["touch"] as TouchScreenButton
-		if is_instance_valid(visual) and is_instance_valid(touch):
-			touch.position = visual.position + visual.size * 0.5
+		if not is_instance_valid(visual):
+			continue
+		var hit_rect := visual.get_global_rect()
+		hit_rect.position -= Vector2(12.0, 12.0)
+		hit_rect.size += Vector2(24.0, 24.0)
+		if hit_rect.has_point(screen_position):
+			return String(item["action"])
+	return ""
+
+func _is_touch_action_pressed(action: String) -> bool:
+	for active_action in _active_touch_actions.values():
+		if String(active_action) == action:
+			return true
+	return false
+
+func _is_action_pressed(action: String) -> bool:
+	return Input.is_action_pressed(action) or _is_touch_action_pressed(action)
+
+func _get_action_strength(action: String) -> float:
+	return maxf(Input.get_action_strength(action), 1.0 if _is_touch_action_pressed(action) else 0.0)
+
+func _refresh_touch_visuals() -> void:
+	for item in _touch_hitboxes:
+		var visual := item["visual"] as Button
+		if is_instance_valid(visual):
+			var pressed := _is_touch_action_pressed(String(item["action"]))
+			if pressed:
+				visual.add_theme_stylebox_override("normal", _button_style(Color(0.08, 0.35, 0.48, 0.94), Color(0.64, 0.9, 1.0, 1.0)))
+			else:
+				visual.add_theme_stylebox_override("normal", _button_style(Color(0.025, 0.055, 0.085, 0.72), Color(0.43, 0.65, 0.76, 0.76)))
 
 func _ensure_input_actions() -> void:
 	var bindings: Dictionary = {
