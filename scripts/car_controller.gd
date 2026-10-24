@@ -43,10 +43,10 @@ func _physics_process(delta: float) -> void:
 		apply_central_force(forward * _throttle * mass * acceleration)
 
 	if _brake > 0.0:
-		if absf(forward_speed) > 1.3:
-			apply_central_force(forward * -signf(forward_speed) * mass * 13.5 * _brake)
+		if forward_speed > 1.3:
+			apply_central_force(-forward * mass * 13.5 * _brake)
 		else:
-			# Once stopped, the brake control also allows a slow reverse.
+			# Once stopped, holding brake allows a slow reverse.
 			apply_central_force(-forward * mass * 3.5 * _brake)
 
 	# Arcade suspension-free prototype: counter lateral slip while allowing a controlled drift.
