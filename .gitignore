@@ -1,0 +1,15 @@
+# Godot generated cache and imports
+.godot/
+.import/
+export.cfg
+export_presets.cfg
+
+# Android / build output
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# Editor / OS
+.DS_Store
+Thumbs.db
