@@ -13,15 +13,10 @@ var _distance_label: Label
 var _nitro_label: Label
 var _nitro_bar: ProgressBar
 var _nitro_value := 100.0
-var _touch_controls := {
-	"left": false,
-	"right": false,
-	"brake": false,
-	"throttle": false,
-	"nitro": false,
-}
+var _touch_hitboxes: Array[Dictionary] = []
 
 func _ready() -> void:
+	_ensure_input_actions()
 	_build_environment()
 	_build_road()
 	_build_city()
@@ -29,18 +24,14 @@ func _ready() -> void:
 	_build_hud()
 
 func _process(delta: float) -> void:
+	_sync_touch_control_positions()
 	if not is_instance_valid(_car):
 		return
 
-	var left_pressed: bool = _touch_controls["left"] or Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT)
-	var right_pressed: bool = _touch_controls["right"] or Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT)
-	var throttle_pressed: bool = _touch_controls["throttle"] or Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP)
-	var brake_pressed: bool = _touch_controls["brake"] or Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN) or Input.is_key_pressed(KEY_SPACE)
-	var nitro_requested: bool = _touch_controls["nitro"] or Input.is_key_pressed(KEY_SHIFT)
-
-	var throttle := 1.0 if throttle_pressed else 0.0
-	var brake := 1.0 if brake_pressed else 0.0
-	var steering := float(right_pressed) - float(left_pressed)
+	var throttle := Input.get_action_strength("accelerate")
+	var brake := Input.get_action_strength("brake")
+	var steering := Input.get_action_strength("steer_right") - Input.get_action_strength("steer_left")
+	var nitro_requested := Input.is_action_pressed("nitro")
 	var nitro_active := nitro_requested and throttle > 0.0 and _nitro_value > 0.0
 
 	if nitro_active:
@@ -339,7 +330,7 @@ func _build_hud() -> void:
 	var root := Control.new()
 	root.name = "Overlay"
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.mouse_filter = Control.MOUSE_FILTER_PASS
+	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	canvas.add_child(root)
 
 	var title := Label.new()
@@ -438,25 +429,19 @@ func _build_hud() -> void:
 	_nitro_bar.add_theme_stylebox_override("fill", bar_fill)
 	root.add_child(_nitro_bar)
 
-	_make_touch_button(root, "‹", "left", "left", 28.0, 32.0, 78.0, 72.0, 29)
-	_make_touch_button(root, "›", "right", "left", 118.0, 32.0, 78.0, 72.0, 29)
+	_make_touch_button(root, "‹", "steer_left", "left", 28.0, 32.0, 78.0, 72.0, 29)
+	_make_touch_button(root, "›", "steer_right", "left", 118.0, 32.0, 78.0, 72.0, 29)
 	_make_touch_button(root, "BRAKE", "brake", "right", 142.0, 32.0, 88.0, 72.0, 14)
-	_make_touch_button(root, "GAS", "throttle", "right", 32.0, 32.0, 92.0, 72.0, 19)
+	_make_touch_button(root, "GAS", "accelerate", "right", 32.0, 32.0, 92.0, 72.0, 19)
 	_make_touch_button(root, "NITRO", "nitro", "right", 32.0, 118.0, 92.0, 48.0, 13)
 
-	var hint := Label.new()
-	hint.text = "KEYBOARD: WASD / ARROWS  •  SHIFT: NITRO"
-	hint.position = Vector2(30.0, 116.0)
-	hint.size = Vector2(400.0, 22.0)
-	hint.add_theme_color_override("font_color", Color(0.55, 0.64, 0.71))
-	hint.add_theme_font_size_override("font_size", 11)
-	root.add_child(hint)
-
 func _make_touch_button(parent: Control, label_text: String, action: String, side: String, offset_x: float, bottom: float, width: float, height: float, font_size: int) -> void:
+	# Button is visual-only. TouchScreenButton receives independent touch IDs and
+	# supports holding throttle while steering with another finger.
 	var button := Button.new()
 	button.text = label_text
 	button.focus_mode = Control.FOCUS_NONE
-	button.mouse_filter = Control.MOUSE_FILTER_STOP
+	button.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	button.add_theme_font_size_override("font_size", font_size)
 	button.add_theme_color_override("font_color", Color(0.96, 0.98, 1.0))
 	button.add_theme_color_override("font_hover_color", Color(1.0, 1.0, 1.0))
@@ -479,12 +464,53 @@ func _make_touch_button(parent: Control, label_text: String, action: String, sid
 	button.offset_top = -(bottom + height)
 	button.offset_bottom = -bottom
 	parent.add_child(button)
-	button.button_down.connect(_set_touch_control.bind(action, true))
-	button.button_up.connect(_set_touch_control.bind(action, false))
 
-func _set_touch_control(action: String, pressed: bool) -> void:
-	if _touch_controls.has(action):
-		_touch_controls[action] = pressed
+	var touch_button := TouchScreenButton.new()
+	touch_button.name = "Touch_" + action
+	touch_button.action = action
+	touch_button.passby_press = true
+	touch_button.shape_visible = false
+	var hit_shape := RectangleShape2D.new()
+	hit_shape.size = Vector2(width + 24.0, height + 24.0)
+	touch_button.shape = hit_shape
+	touch_button.shape_centered = true
+	touch_button.position = button.position + button.size * 0.5
+	parent.add_child(touch_button)
+	touch_button.pressed.connect(_set_touch_visual_pressed.bind(button, true))
+	touch_button.released.connect(_set_touch_visual_pressed.bind(button, false))
+	_touch_hitboxes.append({"visual": button, "touch": touch_button})
+
+func _set_touch_visual_pressed(button: Button, pressed: bool) -> void:
+	if not is_instance_valid(button):
+		return
+	if pressed:
+		button.add_theme_stylebox_override("normal", _button_style(Color(0.08, 0.35, 0.48, 0.94), Color(0.64, 0.9, 1.0, 1.0)))
+	else:
+		button.add_theme_stylebox_override("normal", _button_style(Color(0.025, 0.055, 0.085, 0.72), Color(0.43, 0.65, 0.76, 0.76)))
+
+func _sync_touch_control_positions() -> void:
+	for item in _touch_hitboxes:
+		var visual := item["visual"] as Control
+		var touch := item["touch"] as TouchScreenButton
+		if is_instance_valid(visual) and is_instance_valid(touch):
+			touch.position = visual.position + visual.size * 0.5
+
+func _ensure_input_actions() -> void:
+	var bindings: Dictionary = {
+		"accelerate": [KEY_W, KEY_UP],
+		"brake": [KEY_S, KEY_DOWN, KEY_SPACE],
+		"steer_left": [KEY_A, KEY_LEFT],
+		"steer_right": [KEY_D, KEY_RIGHT],
+		"nitro": [KEY_SHIFT],
+	}
+	for action_name in bindings:
+		if not InputMap.has_action(action_name):
+			InputMap.add_action(action_name)
+		for keycode in bindings[action_name]:
+			var event := InputEventKey.new()
+			event.physical_keycode = keycode
+			if not InputMap.action_has_event(action_name, event):
+				InputMap.action_add_event(action_name, event)
 
 func _button_style(background: Color, border: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
