@@ -16,8 +16,6 @@ jobs:
     container:
       image: barichello/godot-ci:4.5
       options: --user 0:0
-    env:
-      HOME: /root
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -27,6 +25,25 @@ jobs:
           godot --version
           java -version
           mkdir -p build
+
+      - name: Configure Godot Android export
+        run: |
+          echo "Godot export HOME: $HOME"
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.5.stable" "$HOME/.config/godot" "$HOME/.android"
+          test -d /root/.local/share/godot/export_templates/4.5.stable
+          cp -a /root/.local/share/godot/export_templates/4.5.stable/. "$HOME/.local/share/godot/export_templates/4.5.stable/"
+          cp /root/debug.keystore "$HOME/.android/debug.keystore"
+          cat > "$HOME/.config/godot/editor_settings-4.5.tres" <<EOF
+          [gd_resource type="EditorSettings" format=3]
+          [resource]
+          export/android/java_sdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"
+          export/android/android_sdk_path = "/usr/lib/android-sdk"
+          export/android/debug_keystore = "$HOME/.android/debug.keystore"
+          export/android/debug_keystore_user = "androiddebugkey"
+          export/android/debug_keystore_pass = "android"
+          EOF
+          ls -la "$HOME/.local/share/godot/export_templates/4.5.stable"
+          test -s "$HOME/.android/debug.keystore"
 
       - name: Install Android SDK target and build tools
         run: |
