@@ -12,9 +12,11 @@ var _speed_label: Label
 var _distance_label: Label
 var _nitro_label: Label
 var _nitro_bar: ProgressBar
+var _input_debug_label: Label
 var _nitro_value := 100.0
 var _touch_hitboxes: Array[Dictionary] = []
 var _active_touch_actions: Dictionary = {}
+var _touch_debug_message := "TOUCH INPUT / READY"
 
 func _ready() -> void:
 	_ensure_input_actions()
@@ -33,8 +35,13 @@ func _input(event: InputEvent) -> void:
 			var action := _action_at_screen_position(touch.position)
 			if not action.is_empty():
 				_active_touch_actions[touch.index] = action
+				_touch_debug_message = "TOUCH INPUT / " + action.to_upper()
+			else:
+				_touch_debug_message = "TOUCH RECEIVED / NO BUTTON HIT"
 		else:
 			_active_touch_actions.erase(touch.index)
+			if _active_touch_actions.is_empty():
+				_touch_debug_message = "TOUCH INPUT / READY"
 		_refresh_touch_visuals()
 	elif event is InputEventScreenDrag:
 		var drag := event as InputEventScreenDrag
@@ -43,6 +50,7 @@ func _input(event: InputEvent) -> void:
 			var action := _action_at_screen_position(drag.position)
 			if not action.is_empty():
 				_active_touch_actions[drag.index] = action
+				_touch_debug_message = "TOUCH INPUT / " + action.to_upper()
 		_refresh_touch_visuals()
 
 func _process(delta: float) -> void:
@@ -456,6 +464,15 @@ func _build_hud() -> void:
 	_make_touch_button(root, "GAS", "accelerate", "right", 32.0, 32.0, 92.0, 72.0, 19)
 	_make_touch_button(root, "NITRO", "nitro", "right", 32.0, 118.0, 92.0, 48.0, 13)
 
+	_input_debug_label = Label.new()
+	_input_debug_label.name = "TouchInputDiagnostic"
+	_input_debug_label.text = _touch_debug_message
+	_input_debug_label.position = Vector2(32.0, 116.0)
+	_input_debug_label.size = Vector2(420.0, 22.0)
+	_input_debug_label.add_theme_color_override("font_color", Color(0.55, 0.78, 0.86))
+	_input_debug_label.add_theme_font_size_override("font_size", 11)
+	root.add_child(_input_debug_label)
+
 func _make_touch_button(parent: Control, label_text: String, action: String, side: String, offset_x: float, bottom: float, width: float, height: float, font_size: int) -> void:
 	# Buttons are visual-only. Raw screen-touch events are handled by _input().
 	var button := Button.new()
@@ -521,6 +538,13 @@ func _refresh_touch_visuals() -> void:
 				visual.add_theme_stylebox_override("normal", _button_style(Color(0.08, 0.35, 0.48, 0.94), Color(0.64, 0.9, 1.0, 1.0)))
 			else:
 				visual.add_theme_stylebox_override("normal", _button_style(Color(0.025, 0.055, 0.085, 0.72), Color(0.43, 0.65, 0.76, 0.76)))
+	if is_instance_valid(_input_debug_label):
+		var active_names: Array[String] = []
+		for active_action in _active_touch_actions.values():
+			var active_name := String(active_action).to_upper()
+			if not active_names.has(active_name):
+				active_names.append(active_name)
+		_input_debug_label.text = "TOUCH INPUT / " + ", ".join(active_names) if not active_names.is_empty() else _touch_debug_message
 
 func _ensure_input_actions() -> void:
 	var bindings: Dictionary = {
