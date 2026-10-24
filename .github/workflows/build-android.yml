@@ -13,42 +13,65 @@ jobs:
   build-android:
     name: Export Android APK
     runs-on: ubuntu-latest
-    container:
-      image: barichello/godot-ci:4.5
-      options: --user 0:0
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Show toolchain
-        run: |
-          godot --version
-          java -version
-          mkdir -p build
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
 
-      - name: Configure Godot Android export
+      - name: Install Godot and matching export templates
+        shell: bash
         run: |
-          echo "Godot export HOME: $HOME"
-          mkdir -p "$HOME/.local/share/godot/export_templates/4.5.stable" "$HOME/.config/godot" "$HOME/.android"
-          test -d /root/.local/share/godot/export_templates/4.5.stable
-          cp -a /root/.local/share/godot/export_templates/4.5.stable/. "$HOME/.local/share/godot/export_templates/4.5.stable/"
-          cp /root/debug.keystore "$HOME/.android/debug.keystore"
+          set -euo pipefail
+          VERSION="4.5"
+          BASE_URL="https://github.com/godotengine/godot-builds/releases/download/4.5-stable"
+          curl -fL --retry 3 "$BASE_URL/Godot_v4.5-stable_linux.x86_64.zip" -o /tmp/godot.zip
+          curl -fL --retry 3 "$BASE_URL/Godot_v4.5-stable_export_templates.tpz" -o /tmp/godot-templates.tpz
+          unzip -q /tmp/godot.zip -d /tmp/godot-editor
+          sudo install -m 0755 /tmp/godot-editor/Godot_v4.5-stable_linux.x86_64 /usr/local/bin/godot
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.5.stable"
+          unzip -q /tmp/godot-templates.tpz -d /tmp/godot-templates
+          test -f /tmp/godot-templates/templates/android_debug.apk
+          cp -a /tmp/godot-templates/templates/. "$HOME/.local/share/godot/export_templates/4.5.stable/"
+          godot --version
+
+      - name: Install Android SDK target and build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager 2>/dev/null | sort | tail -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "Could not locate sdkmanager under $ANDROID_HOME"
+            exit 1
+          fi
+          set +o pipefail
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses
+          set -o pipefail
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Configure Android signing for debug build
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android" "$HOME/.config/godot"
+          keytool -genkeypair -keystore "$HOME/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 9999 -dname "CN=Android Debug,O=Android,C=US"
           cat > "$HOME/.config/godot/editor_settings-4.5.tres" <<EOF
           [gd_resource type="EditorSettings" format=3]
           [resource]
-          export/android/java_sdk_path = "/usr/lib/jvm/java-17-openjdk-amd64"
-          export/android/android_sdk_path = "/usr/lib/android-sdk"
+          export/android/java_sdk_path = "$JAVA_HOME"
+          export/android/android_sdk_path = "$ANDROID_HOME"
           export/android/debug_keystore = "$HOME/.android/debug.keystore"
           export/android/debug_keystore_user = "androiddebugkey"
           export/android/debug_keystore_pass = "android"
           EOF
-          ls -la "$HOME/.local/share/godot/export_templates/4.5.stable"
           test -s "$HOME/.android/debug.keystore"
-
-      - name: Install Android SDK target and build tools
-        run: |
-          yes | sdkmanager --licenses
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
 
       - name: Import and validate project
         run: godot --headless --editor --path . --quit --import
@@ -56,11 +79,13 @@ jobs:
       - name: Export debug APK
         run: godot --headless --path . --export-debug "Android" build/Streetline.apk
 
-      - name: Verify APK archive
+      - name: Verify APK archive and signature
+        shell: bash
         run: |
+          set -euo pipefail
           test -s build/Streetline.apk
-          file build/Streetline.apk
           unzip -t build/Streetline.apk
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose build/Streetline.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
