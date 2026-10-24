@@ -1,0 +1,63 @@
+name: Build Android APK
+
+on:
+  push:
+    branches:
+      - prototype/first-playable
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Export Android APK
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.5
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          godot --version
+          java -version
+          mkdir -p build
+
+      - name: Import and validate project
+        run: godot --headless --editor --path . --quit --import
+
+      - name: Export debug APK
+        run: godot --headless --path . --export-debug "Android" build/Streetline.apk
+
+      - name: Verify APK archive
+        run: |
+          test -s build/Streetline.apk
+          file build/Streetline.apk
+          unzip -t build/Streetline.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Streetline-Android-APK-${{ github.run_number }}
+          path: build/Streetline.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish downloadable test build
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: Streetline Android test build #${{ github.run_number }}
+          body: |
+            Automated debug APK for the Streetline: Open Road prototype.
+            
+            This is an early test build, not a finished game. Install only if you are testing the prototype.
+          prerelease: true
+          make_latest: false
+          files: build/Streetline.apk
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
